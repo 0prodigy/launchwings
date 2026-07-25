@@ -1,0 +1,120 @@
+name: SETUP-07 Playwright smoke on preview
+
+# Runs apps/web/__tests__/smoke.spec.ts against the Vercel preview deployment
+# for the head SHA of the PR. Per arch §12 PR8.
+#
+# Bootstrap (one-time, by founder):
+#   1. gh secret set VERCEL_TOKEN      --body "<vercel personal token>"
+#   2. gh secret set VERCEL_PROJECT_ID --body "<prj_xxx from vercel project settings>"
+#   3. (Optional) gh secret set VERCEL_TEAM_ID --body "<team_xxx>" if the
+#      project lives under a team (forwarded as ?teamId=...).
+
+on:
+  pull_request:
+    paths:
+      - "apps/web/**"
+      - "packages/trpc/**"
+      - ".github/workflows/setup-07-playwright-smoke.yml"
+
+concurrency:
+  group: smoke-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    name: Playwright smoke vs preview URL
+    runs-on: ubuntu-latest
+    # VERCEL_* secrets are Environment secrets under `Production`.
+    environment: production
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      pull-requests: read
+    env:
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+      VERCEL_TEAM_ID: ${{ secrets.VERCEL_TEAM_ID }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+    steps:
+      - name: Bail if Vercel secrets are not set
+        id: gate
+        run: |
+          if [ -z "${VERCEL_TOKEN}" ] || [ -z "${VERCEL_PROJECT_ID}" ]; then
+            echo "::warning::VERCEL_TOKEN and/or VERCEL_PROJECT_ID not set — skipping preview smoke."
+            echo "Founder action: gh secret set VERCEL_TOKEN && gh secret set VERCEL_PROJECT_ID"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout
+        if: steps.gate.outputs.skip != 'true'
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        if: steps.gate.outputs.skip != 'true'
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node
+        if: steps.gate.outputs.skip != 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install workspace deps
+        if: steps.gate.outputs.skip != 'true'
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Playwright browsers (Chromium only)
+        if: steps.gate.outputs.skip != 'true'
+        run: pnpm --filter @launchwings/web exec playwright install --with-deps chromium
+
+      - name: Discover Vercel preview URL (poll for READY)
+        if: steps.gate.outputs.skip != 'true'
+        id: discover
+        run: |
+          set -euo pipefail
+          team_qs=""
+          if [ -n "${VERCEL_TEAM_ID}" ]; then team_qs="&teamId=${VERCEL_TEAM_ID}"; fi
+          url=""
+          for i in $(seq 1 30); do
+            resp=$(curl --fail --silent \
+              -H "Authorization: Bearer ${VERCEL_TOKEN}" \
+              "https://api.vercel.com/v6/deployments?projectId=${VERCEL_PROJECT_ID}&meta-githubCommitSha=${HEAD_SHA}&limit=10${team_qs}")
+            state=$(echo "${resp}" | jq -r '.deployments[0].state // empty')
+            host=$(echo "${resp}" | jq -r '.deployments[0].url // empty')
+            echo "[smoke] attempt ${i}: state=${state:-none} host=${host:-none}"
+            if [ "${state}" = "READY" ] && [ -n "${host}" ]; then
+              url="https://${host}"
+              break
+            fi
+            if [ "${state}" = "ERROR" ] || [ "${state}" = "CANCELED" ]; then
+              echo "::error::Preview deployment for ${HEAD_SHA} ended in state ${state}"
+              exit 1
+            fi
+            sleep 10
+          done
+          if [ -z "${url}" ]; then
+            echo "::warning::No READY preview deployment for ${HEAD_SHA} after 5min — skipping smoke."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "[smoke] preview URL: ${url}"
+          echo "url=${url}" >> "$GITHUB_OUTPUT"
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+
+      - name: Run Playwright smoke
+        if: steps.gate.outputs.skip != 'true' && steps.discover.outputs.skip != 'true'
+        env:
+          PLAYWRIGHT_BASE_URL: ${{ steps.discover.outputs.url }}
+        run: pnpm --filter @launchwings/web test:smoke
+
+      - name: Upload Playwright report on failure
+        if: failure() && steps.gate.outputs.skip != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: apps/web/playwright-report
+          if-no-files-found: ignore
+          retention-days: 7

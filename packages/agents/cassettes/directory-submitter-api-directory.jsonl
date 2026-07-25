@@ -1,0 +1,1 @@
+{"request":{"provider":"openai","model":"openai:gpt-4o-mini","messagesHash":"4e81ac1e692eabb2f1ffe68f024d30bc3eb9620b37f71f135946e51bbde48b77"},"response":{"text":"pre-launch agent platform for solo founders","costUsdMicros":700,"modelUsed":"openai:gpt-4o-mini","latencyMs":220,"inputTokens":700,"outputTokens":14}}

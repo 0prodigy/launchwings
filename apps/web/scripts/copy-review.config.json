@@ -1,0 +1,29 @@
+{
+  "deny": [
+    {"pattern": "north star", "reason": "internal strategy metric — see VISION.md §North star, do not publish"},
+    {"pattern": "the wedge", "reason": "startup-strategy jargon — rephrase as 'what we do' or 'our scope'"},
+    {"pattern": "wedge boundary", "reason": "internal strategy term"},
+    {"pattern": "anti-icp", "reason": "internal positioning term"},
+    {"pattern": "icp", "reason": "internal positioning term — say 'who we serve' instead", "wholeWord": true},
+    {"pattern": "tam", "reason": "internal sizing term", "wholeWord": true},
+    {"pattern": "arr", "reason": "internal revenue metric", "wholeWord": true},
+    {"pattern": "burn rate", "reason": "internal financial metric"},
+    {"pattern": "runway", "reason": "internal financial metric — only OK if context is 'website launch runway' (manual review)"},
+    {"pattern": "north-star metric", "reason": "internal strategy metric"},
+    {"pattern": "investor deck", "reason": "internal artefact"},
+    {"pattern": "any deck we ever write", "reason": "internal artefact disclosure"},
+    {"pattern": "pre[-_ ]?mortem", "reason": "internal risk doc"},
+    {"pattern": "adr-\\d+", "reason": "internal architecture decision record reference"},
+    {"pattern": "vision\\.md|prd\\.md|setup-\\d+", "reason": "internal doc filename leaked"},
+    {"pattern": "dogfood-lrs-\\d+", "reason": "internal ticket id leaked"},
+    {"pattern": "mvp\\+", "reason": "internal scope marker"},
+    {"pattern": "is the only one we plan to publish", "reason": "publishing-plan disclosure (the actual phrase founder caught today)"},
+    {"pattern": "is the only one we plan to put", "reason": "publishing-plan disclosure"},
+    {"pattern": "founders take pity", "reason": "tone leak from CEO_CRITIQUE"}
+  ],
+  "allowInline": "copy-review: ignore",
+  "allowedFiles": [
+    "**/__tests__/**",
+    "**/node_modules/**"
+  ]
+}

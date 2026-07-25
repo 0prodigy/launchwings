@@ -1,0 +1,26 @@
+# dependencies
+node_modules
+.pnpm-store
+
+# next
+.next
+out
+
+# env
+.env
+.env.local
+.env.*.local
+
+# misc
+*.log
+.DS_Store
+.vercel
+.turbo
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts
+
+# editor
+.vscode
+.idea

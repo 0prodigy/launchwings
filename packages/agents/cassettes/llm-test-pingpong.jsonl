@@ -1,0 +1,1 @@
+{"tag":"llm-test-pingpong","request":{"provider":"anthropic","model":"anthropic:claude-haiku-4-5","messagesHash":"958816ededaaf22c16d1212980828691726cfd2d25efb51aa6691e396007ab9f"},"response":{"text":"pong","costUsdMicros":17,"modelUsed":"anthropic:claude-haiku-4-5","latencyMs":50,"inputTokens":7,"outputTokens":1,"cacheReadTokens":0,"cacheWriteTokens":0}}

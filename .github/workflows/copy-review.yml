@@ -1,0 +1,122 @@
+name: copy-review (public copy scanner)
+
+# Catches the bug class from the founder feedback on /about: a "North Star"
+# section quoted the internal strategy metric verbatim and disclosed publishing
+# plans for homepage / deck / dashboard. This is investor-deck framing on a
+# customer page. The static scanner deny-lists the phrase classes that should
+# never appear on customer-facing surfaces; the deny list is editable in
+# apps/web/scripts/copy-review.config.json without touching the script.
+#
+# Bails-on-warning: any deny match fails the run. Inline-allow with a
+# `// copy-review: ignore` comment on the same line when an explicit override
+# is justified (and document why in the surrounding code).
+
+on:
+  pull_request:
+    paths:
+      - "apps/web/app/**"
+      - "apps/web/components/**"
+      - "apps/web/scripts/copy-review.config.json"
+      - "apps/web/scripts/check-public-copy.mjs"
+      - ".github/workflows/copy-review.yml"
+  push:
+    branches:
+      - "claude/solopreneur-launch-platform-PcSNn"
+    paths:
+      - "apps/web/app/**"
+      - "apps/web/components/**"
+      - "apps/web/scripts/copy-review.config.json"
+      - "apps/web/scripts/check-public-copy.mjs"
+      - ".github/workflows/copy-review.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: copy-review-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  scan:
+    name: Scan customer-facing copy
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Run copy scanner
+        id: scan
+        run: |
+          set +e
+          pnpm --filter @launchwings/web check:copy > scan.out 2>&1
+          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+          cat scan.out
+          # Re-emit raw output so a follow-up step can post a PR comment.
+          {
+            echo "report<<COPY_REVIEW_EOF"
+            cat scan.out
+            echo "COPY_REVIEW_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Comment on PR (matches found)
+        if: github.event_name == 'pull_request' && steps.scan.outputs.exit_code != '0'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const body = [
+              '### copy-review: matches found',
+              '',
+              'The static copy scanner flagged language that should not ship to customer-facing surfaces.',
+              'See `apps/web/scripts/copy-review.config.json` for the deny list and reasons.',
+              '',
+              '<details><summary>Scanner output</summary>',
+              '',
+              '```json',
+              `${{ steps.scan.outputs.report }}`,
+              '```',
+              '',
+              '</details>',
+              '',
+              'Fix the copy (preferred) or add a same-line `// copy-review: ignore` comment with justification.',
+            ].join('\n');
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body,
+            });
+
+      - name: Comment on PR (clean)
+        if: github.event_name == 'pull_request' && steps.scan.outputs.exit_code == '0'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const body = [
+              '### copy-review: clean',
+              '',
+              'No internal-strategy / investor-deck language detected on customer-facing surfaces.',
+            ].join('\n');
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body,
+            });
+
+      - name: Bail on warning
+        if: steps.scan.outputs.exit_code != '0'
+        run: |
+          echo "::error::copy-review scanner found matches — see PR comment / job log above."
+          exit 1

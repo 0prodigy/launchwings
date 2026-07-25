@@ -1,0 +1,1 @@
+{"request":{"provider":"openai","model":"openai:gpt-4o-mini","messagesHash":"7b103191acbd7e8c00c3bd9cf74bbee02db9f443b40183a86f9a40aba6515a33"},"response":{"text":"this tagline is much too long to fit in the field maxLength","costUsdMicros":800,"modelUsed":"openai:gpt-4o-mini","latencyMs":250,"inputTokens":700,"outputTokens":20}}

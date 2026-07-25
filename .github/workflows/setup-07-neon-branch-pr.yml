@@ -1,0 +1,189 @@
+name: SETUP-07 Neon branch per PR
+
+# Per arch §5 + §12 PR8: every PR gets a Neon branch off the project's primary
+# branch, the migrations are applied to it, and the up→down→up round-trip is
+# exercised. On PR close the branch is deleted (best-effort).
+#
+# Bootstrap (one-time, by founder):
+#   1. Create a Neon project for LaunchWings (UI: console.neon.tech).
+#   2. gh secret set NEON_API_KEY      --body "<api key from neon console>"
+#   3. gh secret set NEON_PROJECT_ID   --body "<project id, e.g. holy-paper-12345>"
+#   4. (Follow-up — manual founder step) Wire the Neon-Vercel integration so
+#      preview deployments pick up the per-PR DATABASE_URL automatically:
+#        https://vercel.com/integrations/neon
+#      Until then this workflow surfaces the connection string as a PR comment;
+#      Vercel previews will use the env vars set in the project dashboard.
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, closed]
+
+concurrency:
+  group: neon-branch-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  manage-branch:
+    name: Manage Neon branch + run migrations
+    runs-on: ubuntu-latest
+    # NEON_API_KEY / NEON_PROJECT_ID are Environment secrets under `Production`.
+    environment: production
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      pull-requests: write
+    env:
+      NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
+      NEON_PROJECT_ID: ${{ secrets.NEON_PROJECT_ID }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      BRANCH_NAME: pr-${{ github.event.pull_request.number }}
+    steps:
+      - name: Bail if Neon secrets are not set
+        id: gate
+        run: |
+          if [ -z "${NEON_API_KEY}" ] || [ -z "${NEON_PROJECT_ID}" ]; then
+            echo "::warning::NEON_API_KEY and/or NEON_PROJECT_ID not set — skipping Neon branch management."
+            echo "Founder action: gh secret set NEON_API_KEY && gh secret set NEON_PROJECT_ID"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout
+        if: steps.gate.outputs.skip != 'true'
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        if: steps.gate.outputs.skip != 'true' && github.event.action != 'closed'
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node
+        if: steps.gate.outputs.skip != 'true' && github.event.action != 'closed'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install workspace deps
+        if: steps.gate.outputs.skip != 'true' && github.event.action != 'closed'
+        run: pnpm install --frozen-lockfile
+
+      # ----- PR opened/synchronize: create branch, migrate, round-trip -----
+
+      - name: Create or reuse Neon branch
+        if: steps.gate.outputs.skip != 'true' && github.event.action != 'closed'
+        id: branch
+        run: |
+          set -euo pipefail
+          api="https://console.neon.tech/api/v2/projects/${NEON_PROJECT_ID}"
+          # Find an existing branch with our name (idempotent on synchronize).
+          existing=$(curl --fail --silent \
+            -H "Authorization: Bearer ${NEON_API_KEY}" \
+            -H "Accept: application/json" \
+            "${api}/branches" \
+            | jq -r --arg name "${BRANCH_NAME}" '.branches[] | select(.name==$name) | .id')
+
+          if [ -n "${existing}" ]; then
+            echo "[neon] reusing existing branch id=${existing}"
+            branch_id="${existing}"
+          else
+            echo "[neon] creating branch ${BRANCH_NAME}"
+            create=$(curl --fail --silent \
+              -X POST \
+              -H "Authorization: Bearer ${NEON_API_KEY}" \
+              -H "Content-Type: application/json" \
+              -H "Accept: application/json" \
+              "${api}/branches" \
+              -d "{\"branch\":{\"name\":\"${BRANCH_NAME}\"},\"endpoints\":[{\"type\":\"read_write\"}]}")
+            branch_id=$(echo "${create}" | jq -r '.branch.id')
+            echo "[neon] created branch id=${branch_id}"
+          fi
+          echo "branch_id=${branch_id}" >> "$GITHUB_OUTPUT"
+
+          # Fetch a connection URI for the role (default `neondb_owner`).
+          # Neon's connection_uri endpoint requires database_name + role_name.
+          databases=$(curl --fail --silent \
+            -H "Authorization: Bearer ${NEON_API_KEY}" \
+            -H "Accept: application/json" \
+            "${api}/branches/${branch_id}/databases")
+          db_name=$(echo "${databases}" | jq -r '.databases[0].name')
+          role_name=$(echo "${databases}" | jq -r '.databases[0].owner_name')
+
+          uri=$(curl --fail --silent \
+            -H "Authorization: Bearer ${NEON_API_KEY}" \
+            -H "Accept: application/json" \
+            "${api}/connection_uri?branch_id=${branch_id}&database_name=${db_name}&role_name=${role_name}&pooled=true")
+          conn=$(echo "${uri}" | jq -r '.uri')
+          if [ -z "${conn}" ] || [ "${conn}" = "null" ]; then
+            echo "::error::Failed to fetch Neon connection_uri"
+            exit 1
+          fi
+          # Mask the secret in logs.
+          echo "::add-mask::${conn}"
+          echo "DATABASE_URL=${conn}" >> "$GITHUB_ENV"
+          echo "DATABASE_URL_POOLED=${conn}" >> "$GITHUB_ENV"
+          echo "[neon] connection ready for branch ${BRANCH_NAME}"
+
+      - name: Apply migrations
+        if: steps.gate.outputs.skip != 'true' && github.event.action != 'closed'
+        run: pnpm --filter @launchwings/db db:migrate
+
+      - name: Round-trip test (up → down → up)
+        if: steps.gate.outputs.skip != 'true' && github.event.action != 'closed'
+        run: pnpm --filter @launchwings/db migrate:roundtrip
+
+      - name: Comment connection hint on PR
+        if: steps.gate.outputs.skip != 'true' && github.event.action != 'closed'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const branch = process.env.BRANCH_NAME;
+            const marker = '<!-- setup-07-neon-branch -->';
+            const body = [
+              marker,
+              `**Neon branch ready:** \`${branch}\``,
+              '',
+              'Vercel preview will use the project dashboard `DATABASE_URL` until',
+              'the founder enables the Neon-Vercel integration',
+              '(<https://vercel.com/integrations/neon>). The per-PR connection',
+              'string is masked in workflow logs and not posted here for safety.',
+              '',
+              'Migrations applied + up→down→up round-trip green on this branch.',
+            ].join('\n');
+            const { owner, repo } = context.repo;
+            const pr = context.payload.pull_request.number;
+            const { data: comments } = await github.rest.issues.listComments({
+              owner, repo, issue_number: pr, per_page: 100,
+            });
+            const existing = comments.find((c) => c.body && c.body.includes(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner, repo, comment_id: existing.id, body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner, repo, issue_number: pr, body,
+              });
+            }
+
+      # ----- PR closed: delete the branch (best-effort) -----
+
+      - name: Delete Neon branch on PR close
+        if: steps.gate.outputs.skip != 'true' && github.event.action == 'closed'
+        run: |
+          set -euo pipefail
+          api="https://console.neon.tech/api/v2/projects/${NEON_PROJECT_ID}"
+          existing=$(curl --fail --silent \
+            -H "Authorization: Bearer ${NEON_API_KEY}" \
+            -H "Accept: application/json" \
+            "${api}/branches" \
+            | jq -r --arg name "${BRANCH_NAME}" '.branches[] | select(.name==$name) | .id')
+          if [ -z "${existing}" ]; then
+            echo "::warning::Neon branch ${BRANCH_NAME} not found — nothing to delete."
+            exit 0
+          fi
+          curl --fail --silent --show-error \
+            -X DELETE \
+            -H "Authorization: Bearer ${NEON_API_KEY}" \
+            "${api}/branches/${existing}" >/dev/null
+          echo "[neon] deleted branch ${BRANCH_NAME} (id=${existing})"

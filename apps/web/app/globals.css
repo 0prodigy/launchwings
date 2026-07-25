@@ -1,0 +1,67 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * shadcn/ui token layer (dark-only). The HSL channel triplets here are
+ * consumed by tailwind.config.ts via `hsl(var(--token))`. They map to the
+ * existing dark/amber palette below; existing pages should look unchanged.
+ *
+ * Pre-shadcn aliases (--color-bg etc.) are kept so existing inline styles in
+ * audit-form, hero-banner, and marketing pages don't shift. New code should
+ * prefer the shadcn tokens (bg-background, text-foreground, etc.).
+ */
+:root {
+  /* shadcn/ui tokens — dark-only */
+  --background: 0 0% 5%;
+  --foreground: 0 0% 97%;
+  --card: 0 0% 8%;
+  --card-foreground: 0 0% 97%;
+  --popover: 0 0% 8%;
+  --popover-foreground: 0 0% 97%;
+  --primary: 38 92% 50%;
+  --primary-foreground: 0 0% 9%;
+  --secondary: 0 0% 11%;
+  --secondary-foreground: 0 0% 97%;
+  --muted: 0 0% 11%;
+  --muted-foreground: 0 0% 50%;
+  --accent: 0 0% 11%;
+  --accent-foreground: 0 0% 97%;
+  --destructive: 0 62% 40%;
+  --destructive-foreground: 0 0% 97%;
+  --border: 0 0% 13%;
+  --input: 0 0% 11%;
+  --ring: 38 92% 50%;
+  --radius: 0.5rem;
+
+  /* Pre-shadcn aliases */
+  --color-bg: #0d0d0d;
+  --color-fg: #f7f7f7;
+  --color-muted: #808080;
+  --color-border: #212121;
+  --color-accent: #f59e0b;
+  --color-accent-fg: #171717;
+}
+
+html,
+body {
+  background: var(--color-bg);
+  color: var(--color-fg);
+  font-family: 'Inter', ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background: var(--color-accent);
+  color: var(--color-accent-fg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

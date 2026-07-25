@@ -1,0 +1,72 @@
+name: SETUP-05 agents test (cassette replay)
+
+# Cassette-driven unit tests for @launchwings/agents. Per docs/architecture/STACK.md
+# hard rule #4, replay-from-cassette is the ONLY acceptable test execution mode in
+# CI for LLM-judge evaluators. This workflow runs on every PR that touches the
+# agents package or the workflow itself, asserts type-check + smoke + test pass,
+# and never needs ANTHROPIC_API_KEY / OPENAI_API_KEY.
+#
+# If the test step fails with "hash mismatch" or "cassette exhausted", the prompt
+# has drifted — re-record the cassette locally with:
+#   LLM_CASSETTE_MODE=record pnpm --filter @launchwings/agents test
+# (real keys required), then commit the updated .jsonl.
+
+on:
+  pull_request:
+    paths:
+      - "packages/agents/**"
+      - "pnpm-lock.yaml"
+      - ".github/workflows/setup-05-agents-test.yml"
+  push:
+    branches:
+      - "claude/solopreneur-launch-platform-PcSNn"
+    paths:
+      - "packages/agents/**"
+      - "pnpm-lock.yaml"
+      - ".github/workflows/setup-05-agents-test.yml"
+
+concurrency:
+  group: agents-test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Vitest + smoke (replay mode)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    env:
+      # Force replay mode. Tests must not make outbound network calls.
+      LLM_CASSETTE_MODE: replay
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Build workspace dependencies
+        # @launchwings/agents imports @launchwings/db (and @launchwings/lrs) via
+        # workspace package.json exports that point at `dist/index.js` — see
+        # packages/db/package.json and packages/lrs/package.json. Without a
+        # build step the smoke and vitest runs fail with ERR_MODULE_NOT_FOUND
+        # against the missing `dist/`. Mirrors the build-deps pattern in
+        # setup-04-trigger-deploy.yml; turbo handles the dep graph via
+        # `dependsOn: ["^build"]` in turbo.json.
+        run: pnpm turbo run build --filter=@launchwings/agents
+
+      - name: Type-check agents package
+        run: pnpm --filter @launchwings/agents type-check
+
+      - name: Smoke (boot-time public surface)
+        run: pnpm --filter @launchwings/agents smoke
+
+      - name: Vitest (cassette replay)
+        run: pnpm --filter @launchwings/agents test

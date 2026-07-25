@@ -1,0 +1,3 @@
+@launchwings/api — see /health and /trpc/* on this host.
+This file exists only to satisfy Vercel's "Output Directory" check.
+The actual deploy artefact is the Function at api/index.ts.

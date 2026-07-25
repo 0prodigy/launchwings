@@ -1,0 +1,71 @@
+name: LRC-01 lrs test
+
+# Vitest unit tests for @launchwings/lrs (the audit harness shipped in
+# LRC-01 PR1). Runs on PRs touching the lrs package or the agents package
+# (the auditTarget Trigger.dev task wraps the runner) and on direct pushes
+# to the production branch.
+#
+# Per docs/architecture/STACK.md hard rule #4, replay-from-cassette is the
+# only acceptable test execution mode in CI for LLM-judge evaluators. PR1
+# evaluators (meta-description, og-image) are pure-HTML / fetch-stub and
+# don't touch any LLM, so no cassette is required for this workflow.
+
+on:
+  pull_request:
+    paths:
+      - "packages/lrs/**"
+      - "packages/agents/**"
+      - "packages/db/**"
+      - "pnpm-lock.yaml"
+      - ".github/workflows/lrc-01-test.yml"
+  push:
+    branches:
+      - "claude/solopreneur-launch-platform-PcSNn"
+    paths:
+      - "packages/lrs/**"
+      - "packages/agents/**"
+      - "packages/db/**"
+      - "pnpm-lock.yaml"
+      - ".github/workflows/lrc-01-test.yml"
+
+concurrency:
+  group: lrs-test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Vitest (lrs harness + evaluators)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Build workspace dependencies
+        # @launchwings/lrs and @launchwings/agents both import @launchwings/db
+        # via package.json exports pointing at `dist/index.js`. Without a build
+        # step vitest fails to resolve "@launchwings/db" (see runner.test.ts
+        # error: "Failed to resolve entry for package @launchwings/db"). Mirrors
+        # the build-deps pattern in setup-04-trigger-deploy.yml; turbo handles
+        # the dep graph via `dependsOn: ["^build"]` in turbo.json.
+        run: pnpm turbo run build --filter=@launchwings/lrs --filter=@launchwings/agents
+
+      - name: Type-check lrs package
+        run: pnpm --filter @launchwings/lrs type-check
+
+      - name: Vitest (lrs)
+        run: pnpm --filter @launchwings/lrs test
+
+      - name: Vitest (agents — verify auditTarget task compiles + suite still green)
+        run: pnpm --filter @launchwings/agents test

@@ -1,0 +1,62 @@
+name: WEB-001 link-availability check
+
+# Catches the bug class from docs/dogfood/learnings.md #12 — a Next 15 build
+# happily ships <meta og:image> / <link rel=icon> URLs pointing at files that
+# don't exist anywhere. Runs static analysis on prerendered HTML.
+# See docs/tickets/web-001-build-time-link-availability.md.
+
+on:
+  pull_request:
+    paths:
+      - "apps/web/**"
+      - ".github/workflows/web-001-link-check.yml"
+  push:
+    branches:
+      - "claude/solopreneur-launch-platform-PcSNn"
+  schedule:
+    # Nightly at 03:30 UTC. Catches regressions caused by external dep updates.
+    - cron: "30 3 * * *"
+  workflow_dispatch:
+
+jobs:
+  check:
+    name: Build + check shipped asset URLs
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          # The lockfile lives at the workspace root, not in apps/web. The
+          # previous `apps/web/pnpm-lock.yaml` path was a leftover from a
+          # pre-monorepo layout; setup-node@v4 fails with "Some specified paths
+          # were not resolved" when the file doesn't exist.
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Build (web + workspace deps)
+        # apps/web imports @launchwings/db (and other workspace packages) via
+        # package.json exports pointing at `dist/index.js`. Turbo runs the
+        # workspace deps' build first via `dependsOn: ["^build"]` in turbo.json,
+        # then `next build` for the web app. Mirrors setup-04-trigger-deploy.yml.
+        run: pnpm turbo run build --filter=@launchwings/web
+        env:
+          NEXT_TELEMETRY_DISABLED: "1"
+          # Next 15 prerenders /_not-found at build time, which evaluates
+          # <ClerkProvider/> in the root layout, which throws on a missing
+          # publishableKey. WEB-001 only checks shipped asset URLs, so a
+          # well-formed dummy key (decodes to "dev.clerk.dev$") is enough to
+          # let the build complete. NEXT_PUBLIC_* keys are not secrets — they
+          # ship in the client bundle. The dummy is never used at runtime;
+          # this workflow doesn't deploy.
+          NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: "pk_test_ZGV2LmNsZXJrLmRldiQ"
+
+      - name: Check shipped assets
+        working-directory: apps/web
+        run: pnpm check:assets

@@ -1,0 +1,43 @@
+# Workspace-level ignores. Each package may add its own.
+
+# dependencies
+node_modules/
+.pnpm-store/
+
+# build / cache
+.turbo/
+.next/
+out/
+dist/
+build/
+*.tsbuildinfo
+coverage/
+pnpm-debug.log*
+
+# env (never committed)
+.env
+.env.local
+.env.*.local
+
+# editor / OS
+.vscode/
+.idea/
+*.log
+.DS_Store
+
+# vercel
+.vercel
+
+# sentry CLI (can carry an auth token if the setup wizard is ever re-run)
+.sentryclirc
+
+# playwright
+playwright-report/
+test-results/
+blob-report/
+.playwright-mcp/
+
+# claude code subagent worktrees (transient, harness-managed)
+.claude/worktrees/
+# local-machine Claude Code settings (permissions etc.) — never shared state
+.claude/settings.local.json

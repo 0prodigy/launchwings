@@ -1,0 +1,7 @@
+{
+  "prompt": "An ultra-minimalist editorial illustration: a single paper airplane mid-flight crossing a soft gradient sky from off-black to deep indigo to warm neutral, with subtle vector lines suggesting altitude and speed. No text, no logos, no people. Studio-quality, high contrast, suitable as a website hero banner. 16:9 widescreen composition, low-noise, clean negative space on the left third for overlay text.",
+  "seed": 7042,
+  "outputPath": "public/hero-banner.png",
+  "width": 1600,
+  "height": 900
+}

@@ -1,0 +1,111 @@
+name: SETUP-04 deploy agents to Trigger.dev v3
+
+# CI deploys @launchwings/agents tasks to Trigger.dev v3. Per
+# docs/architecture/SETUP-01-monorepo-design.md §7, Trigger.dev v3 is the
+# durable runner for all agent work — LRC-01's 76-evaluator fan-out is the
+# wedge that justified the runtime choice over inline-Vercel.
+#
+# Bootstrap (one-time, by founder):
+#   1. Create a Trigger.dev v3 project at https://cloud.trigger.dev (free tier
+#      is fine for SETUP-04 / SETUP-05; pricing starts above the dev cap).
+#   2. Copy the project ref (`proj_...`) into a repo secret:
+#        gh secret set TRIGGER_PROJECT_REF
+#      The secret is also exposed at runtime to apps/api so the SDK knows
+#      which project to dispatch into.
+#   3. Generate a deploy access token in the Trigger dashboard
+#      (Settings → API Keys → "Personal Access Token" or a project-scoped
+#      deploy token):
+#        gh secret set TRIGGER_ACCESS_TOKEN
+#   4. Set TRIGGER_SECRET_KEY (the prod env secret key from the dashboard) on
+#      the api host:
+#        flyctl secrets set TRIGGER_SECRET_KEY=tr_prod_... --app launchwings-api
+#        flyctl secrets set TRIGGER_PROJECT_REF=proj_... --app launchwings-api
+#
+# Until those secrets land this workflow no-ops with a warning, mirroring the
+# bail-fast pattern from setup-01b-fly-deploy.yml.
+
+on:
+  push:
+    branches:
+      - "claude/solopreneur-launch-platform-PcSNn"
+    paths:
+      - "packages/agents/**"
+      - "pnpm-lock.yaml"
+      - ".github/workflows/setup-04-trigger-deploy.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: trigger-deploy-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    name: Deploy @launchwings/agents to Trigger.dev v3
+    runs-on: ubuntu-latest
+    # Secrets are scoped under the `Production` GitHub environment.
+    environment: production
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    env:
+      # Trigger.dev's CLI reads TRIGGER_ACCESS_TOKEN for the deploy hop. Note
+      # this is distinct from TRIGGER_SECRET_KEY (which is the runtime API key
+      # that apps/api uses to dispatch tasks). The deploy token is short-lived
+      # and project-scoped; the secret key is long-lived and env-scoped.
+      TRIGGER_ACCESS_TOKEN: ${{ secrets.TRIGGER_ACCESS_TOKEN }}
+      TRIGGER_PROJECT_REF: ${{ secrets.TRIGGER_PROJECT_REF }}
+    steps:
+      - name: Bail if Trigger.dev secrets are not set
+        id: gate
+        run: |
+          if [ -z "${{ secrets.TRIGGER_ACCESS_TOKEN }}" ] || [ -z "${{ secrets.TRIGGER_PROJECT_REF }}" ]; then
+            echo "::warning::TRIGGER_ACCESS_TOKEN or TRIGGER_PROJECT_REF is not set on the Production environment — skipping deploy."
+            echo "Founder action: see header of this workflow file for the bootstrap steps."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - if: steps.gate.outputs.skip != 'true'
+        uses: actions/checkout@v4
+
+      - if: steps.gate.outputs.skip != 'true'
+        uses: pnpm/action-setup@v4
+
+      - if: steps.gate.outputs.skip != 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install
+        if: steps.gate.outputs.skip != 'true'
+        run: pnpm install --frozen-lockfile
+
+      - name: Type-check agents package
+        if: steps.gate.outputs.skip != 'true'
+        run: pnpm --filter @launchwings/agents type-check
+
+      - name: Build workspace dependencies
+        if: steps.gate.outputs.skip != 'true'
+        # @launchwings/agents imports @launchwings/db (and @launchwings/lrs),
+        # both of which expose `dist/index.js` at runtime via package.json
+        # exports. Trigger.dev's esbuild deploy step cannot resolve the
+        # workspace `:` protocol against a missing dist, so we have to build
+        # the workspace deps before invoking `trigger deploy`. turbo handles
+        # the dep graph (build is `dependsOn: ["^build"]`).
+        run: pnpm turbo run build --filter=@launchwings/agents
+
+      - name: Deploy to Trigger.dev (prod env)
+        if: steps.gate.outputs.skip != 'true'
+        # Trigger.dev v3 CLI: the binary is `trigger` (not `trigger.dev`); the
+        # npm package is named `trigger.dev` but its `bin` field exposes
+        # `trigger`. pnpm v10's strict resolution rejects `pnpm exec trigger.dev`
+        # with `Command not found`. Use the actual bin name.
+        # --env prod targets the production environment (use --env staging
+        # once we layer that in SETUP-07). `pnpm --filter ... exec` doesn't
+        # reliably resolve the local node_modules/.bin in pnpm 10 with
+        # isolated installs, so cd into the package and let `pnpm exec`
+        # find its own bin.
+        working-directory: packages/agents
+        run: pnpm exec trigger deploy --env prod

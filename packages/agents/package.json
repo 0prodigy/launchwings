@@ -1,0 +1,60 @@
+{
+  "name": "@launchwings/agents",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./dist/index.js"
+    },
+    "./tasks": {
+      "types": "./src/tasks/index.ts",
+      "import": "./dist/tasks/index.js"
+    },
+    "./crons": {
+      "types": "./src/crons/index.ts",
+      "import": "./dist/crons/index.js"
+    },
+    "./llm": {
+      "types": "./src/llm.ts",
+      "import": "./dist/llm.js"
+    },
+    "./cassettes": {
+      "types": "./src/cassettes/index.ts",
+      "import": "./dist/cassettes/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsup",
+    "type-check": "tsc --noEmit",
+    "smoke": "tsx scripts/smoke.ts",
+    "seed-directory-catalog": "tsx scripts/seed-directory-catalog.ts",
+    "seed-build-platforms": "tsx scripts/seed-build-platforms.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "trigger:dev": "trigger.dev dev",
+    "trigger:deploy": "trigger.dev deploy"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.95.0",
+    "@browserbasehq/sdk": "^2.10.0",
+    "@launchwings/db": "workspace:*",
+    "@launchwings/lrs": "workspace:*",
+    "@trigger.dev/sdk": "^4.4.5",
+    "chromium-bidi": "^15.0.0",
+    "drizzle-orm": "0.36.4",
+    "openai": "^6.37.0",
+    "playwright-core": "^1.59.1",
+    "unpdf": "^1.6.2",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "@launchwings/tsconfig": "workspace:*",
+    "@types/node": "^22.10.0",
+    "trigger.dev": "^4.4.5",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0",
+    "vitest": "^4.1.0"
+  }
+}

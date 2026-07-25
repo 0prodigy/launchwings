@@ -1,0 +1,39 @@
+{
+  "name": "@launchwings/api",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "tsx watch --clear-screen=false src/index.ts",
+    "start": "tsx src/index.ts",
+    "build": "tsc --noEmit",
+    "lint": "echo \"(no lint configured for api yet)\"",
+    "type-check": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:tenant-iso": "tsx scripts/tenant-isolation-check.ts"
+  },
+  "dependencies": {
+    "@clerk/backend": "^3.4.6",
+    "@hono/node-server": "^1.13.0",
+    "@hono/trpc-server": "^0.3.0",
+    "@launchwings/agents": "workspace:*",
+    "@launchwings/db": "workspace:*",
+    "@launchwings/observability": "workspace:*",
+    "@launchwings/trpc": "workspace:*",
+    "@trpc/server": "^11.0.0",
+    "drizzle-orm": "0.36.4",
+    "hono": "^4.6.0",
+    "tsx": "^4.19.0",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "@launchwings/tsconfig": "workspace:*",
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.0",
+    "vitest": "^4.1.0"
+  }
+}

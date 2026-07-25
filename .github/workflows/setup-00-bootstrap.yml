@@ -1,0 +1,230 @@
+name: SETUP-00 bootstrap cloud (Neon migrate + propagate DATABASE_URL)
+
+# One-time / re-runnable bootstrap. Trigger this BEFORE the first end-to-end
+# deploy and any time the production schema needs to be reapplied to the Neon
+# primary branch.
+#
+# What it does:
+#   1. Calls the Neon API (NEON_API_KEY + NEON_PROJECT_ID, both env secrets
+#      under the `Production` GitHub environment) to fetch the connection
+#      string of the project's primary branch's default endpoint. Pooled and
+#      unpooled URLs are derived locally.
+#   2. Runs `pnpm --filter @launchwings/db db:migrate` against that URL so the
+#      migrations under packages/db/migrations land on the prod Neon branch.
+#   3. Propagates DATABASE_URL + DATABASE_URL_POOLED to BOTH Vercel projects
+#      (the apps/web project via VERCEL_PROJECT_ID, the apps/api project via
+#      VERCEL_API_PROJECT_ID). The Vercel REST API stores them encrypted.
+#      Connection strings are never echoed, never persisted as artifacts, and
+#      never written to GITHUB_ENV (only to a step-local shell var).
+#
+# Per arc-2 follow-up: Fly was removed in favor of Vercel for apps/api, so this
+# workflow no longer touches Fly. If we ever bring back a Fly target, restore
+# the push_to_fly leg from git history (commit 33aac01 last carried it).
+
+on:
+  workflow_dispatch:
+    inputs:
+      apply_migrations:
+        description: "Run db:migrate against the Neon primary branch"
+        type: boolean
+        default: true
+      push_to_web_vercel:
+        description: "Set DATABASE_URL on the apps/web Vercel prod env"
+        type: boolean
+        default: true
+      push_to_api_vercel:
+        description: "Set DATABASE_URL on the apps/api Vercel prod env"
+        type: boolean
+        default: true
+
+concurrency:
+  group: setup-00-bootstrap
+  cancel-in-progress: false
+
+jobs:
+  bootstrap:
+    name: Bootstrap Neon → migrate → push to Vercel projects
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    env:
+      NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
+      NEON_PROJECT_ID: ${{ secrets.NEON_PROJECT_ID }}
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+      VERCEL_API_PROJECT_ID: ${{ secrets.VERCEL_API_PROJECT_ID }}
+      VERCEL_TEAM_ID: ${{ secrets.VERCEL_TEAM_ID }}
+    steps:
+      - name: Bail if Neon secrets are missing
+        run: |
+          if [ -z "${NEON_API_KEY}" ] || [ -z "${NEON_PROJECT_ID}" ]; then
+            echo "::error::NEON_API_KEY and/or NEON_PROJECT_ID are not set on the Production environment."
+            echo "Run: gh secret set NEON_API_KEY --env production && gh secret set NEON_PROJECT_ID --env production"
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install workspace deps
+        run: pnpm install --frozen-lockfile
+
+      - name: Resolve Neon primary branch + endpoint
+        id: neon
+        run: |
+          set -euo pipefail
+          api="https://console.neon.tech/api/v2/projects/${NEON_PROJECT_ID}"
+
+          primary=$(curl --fail --silent \
+            -H "Accept: application/json" \
+            -H "Authorization: Bearer ${NEON_API_KEY}" \
+            "${api}/branches" \
+            | jq -r '.branches[] | select(.primary == true) | .id' \
+            | head -n1)
+          if [ -z "${primary}" ] || [ "${primary}" = "null" ]; then
+            echo "::error::No primary branch found on Neon project ${NEON_PROJECT_ID}"
+            exit 1
+          fi
+          echo "branch_id=${primary}" >> "$GITHUB_OUTPUT"
+
+          role=$(curl --fail --silent \
+            -H "Authorization: Bearer ${NEON_API_KEY}" \
+            "${api}/branches/${primary}/roles" \
+            | jq -r '.roles[0].name')
+          db=$(curl --fail --silent \
+            -H "Authorization: Bearer ${NEON_API_KEY}" \
+            "${api}/branches/${primary}/databases" \
+            | jq -r '.databases[0].name')
+          echo "role=${role}" >> "$GITHUB_OUTPUT"
+          echo "database=${db}" >> "$GITHUB_OUTPUT"
+
+      - name: Fetch Neon connection URIs (masked)
+        id: dburl
+        run: |
+          set -euo pipefail
+          api="https://console.neon.tech/api/v2/projects/${NEON_PROJECT_ID}"
+          branch_id="${{ steps.neon.outputs.branch_id }}"
+          role="${{ steps.neon.outputs.role }}"
+          database="${{ steps.neon.outputs.database }}"
+
+          unpooled=$(curl --fail --silent \
+            -H "Authorization: Bearer ${NEON_API_KEY}" \
+            "${api}/connection_uri?branch_id=${branch_id}&role_name=${role}&database_name=${database}&pooled=false" \
+            | jq -r '.uri')
+          pooled=$(curl --fail --silent \
+            -H "Authorization: Bearer ${NEON_API_KEY}" \
+            "${api}/connection_uri?branch_id=${branch_id}&role_name=${role}&database_name=${database}&pooled=true" \
+            | jq -r '.uri')
+
+          if [ -z "${unpooled}" ] || [ "${unpooled}" = "null" ]; then
+            echo "::error::Could not resolve unpooled connection URI"
+            exit 1
+          fi
+
+          echo "::add-mask::${unpooled}"
+          echo "::add-mask::${pooled}"
+
+          {
+            echo "unpooled<<EOF"
+            echo "${unpooled}"
+            echo "EOF"
+            echo "pooled<<EOF"
+            echo "${pooled}"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Apply migrations to Neon primary branch
+        if: ${{ inputs.apply_migrations }}
+        env:
+          DATABASE_URL: ${{ steps.dburl.outputs.unpooled }}
+          DATABASE_URL_POOLED: ${{ steps.dburl.outputs.pooled }}
+        run: pnpm --filter @launchwings/db db:migrate
+
+      # ----- Vercel: upsert DATABASE_URL on each project's prod env -----
+      # Same delete-then-create routine for both projects. Defined once as a
+      # shell function and called per project id.
+
+      - name: Push DATABASE_URL to Vercel projects
+        if: ${{ (inputs.push_to_web_vercel || inputs.push_to_api_vercel) && env.VERCEL_TOKEN != '' }}
+        env:
+          DATABASE_URL: ${{ steps.dburl.outputs.unpooled }}
+          DATABASE_URL_POOLED: ${{ steps.dburl.outputs.pooled }}
+          PUSH_WEB: ${{ inputs.push_to_web_vercel }}
+          PUSH_API: ${{ inputs.push_to_api_vercel }}
+        run: |
+          set -euo pipefail
+          team_qs=""
+          if [ -n "${VERCEL_TEAM_ID}" ]; then team_qs="?teamId=${VERCEL_TEAM_ID}"; fi
+
+          upsert_one () {
+            local project_id="$1"
+            local key="$2"
+            local value="$3"
+            local base="https://api.vercel.com/v10/projects/${project_id}/env"
+
+            list=$(curl --fail --silent \
+              -H "Authorization: Bearer ${VERCEL_TOKEN}" \
+              "${base}${team_qs}")
+            ids=$(echo "${list}" | jq -r --arg k "${key}" \
+              '.envs[] | select(.key == $k) | select(.target | index("production")) | .id')
+            for id in ${ids}; do
+              curl --fail --silent -X DELETE \
+                -H "Authorization: Bearer ${VERCEL_TOKEN}" \
+                "${base}/${id}${team_qs}" >/dev/null
+            done
+            curl --fail --silent -X POST \
+              -H "Authorization: Bearer ${VERCEL_TOKEN}" \
+              -H "Content-Type: application/json" \
+              "${base}${team_qs}" \
+              -d "$(jq -n --arg k "${key}" --arg v "${value}" \
+                '{key:$k, value:$v, type:"encrypted", target:["production"]}')" \
+              >/dev/null
+            echo "  ${key} set on project ${project_id}"
+          }
+
+          if [ "${PUSH_WEB}" = "true" ]; then
+            if [ -z "${VERCEL_PROJECT_ID}" ]; then
+              echo "::warning::push_to_web_vercel=true but VERCEL_PROJECT_ID is empty — skipping web project."
+            else
+              echo "Pushing DATABASE_URL/_POOLED to web project ${VERCEL_PROJECT_ID}"
+              upsert_one "${VERCEL_PROJECT_ID}"     DATABASE_URL        "${DATABASE_URL}"
+              upsert_one "${VERCEL_PROJECT_ID}"     DATABASE_URL_POOLED "${DATABASE_URL_POOLED}"
+            fi
+          fi
+
+          if [ "${PUSH_API}" = "true" ]; then
+            if [ -z "${VERCEL_API_PROJECT_ID}" ]; then
+              echo "::warning::push_to_api_vercel=true but VERCEL_API_PROJECT_ID is empty — skipping api project. Set it with: gh secret set VERCEL_API_PROJECT_ID --env production"
+            else
+              echo "Pushing DATABASE_URL/_POOLED to api project ${VERCEL_API_PROJECT_ID}"
+              upsert_one "${VERCEL_API_PROJECT_ID}" DATABASE_URL        "${DATABASE_URL}"
+              upsert_one "${VERCEL_API_PROJECT_ID}" DATABASE_URL_POOLED "${DATABASE_URL_POOLED}"
+            fi
+          fi
+
+      - name: Skip Vercel push (no token / both disabled)
+        if: ${{ (!inputs.push_to_web_vercel && !inputs.push_to_api_vercel) || env.VERCEL_TOKEN == '' }}
+        run: echo "::notice::Vercel env push skipped."
+
+      - name: Summary
+        run: |
+          {
+            echo "## SETUP-00 bootstrap"
+            echo ""
+            echo "- Neon project: \`${NEON_PROJECT_ID}\`"
+            echo "- Primary branch id: \`${{ steps.neon.outputs.branch_id }}\`"
+            echo "- Role / database: \`${{ steps.neon.outputs.role }}\` / \`${{ steps.neon.outputs.database }}\`"
+            echo "- Migrations applied: \`${{ inputs.apply_migrations }}\`"
+            echo "- Vercel web push: \`${{ inputs.push_to_web_vercel }}\`"
+            echo "- Vercel api push: \`${{ inputs.push_to_api_vercel }}\`"
+            echo ""
+            echo "Connection strings were masked throughout this run."
+          } >> "$GITHUB_STEP_SUMMARY"
