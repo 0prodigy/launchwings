@@ -190,7 +190,7 @@ Result: no CORS, no second domain, no api URL in client bundles. tRPC client (wh
 
 ### Follow-up 5: founder git identity recorded
 
-Vercel rejected a deploy because the HEAD commit was authored as `noreply@anthropic.com`. Pinned `pathakvikash9211@gmail.com` in `.git/config` for this clone and recorded the durable instruction in `CLAUDE.md` so future sessions / clones re-set it before committing.
+Vercel rejected a deploy because the HEAD commit was authored as `noreply@anthropic.com`. Pinned `akash@lyric.tech` in `.git/config` for this clone and recorded the durable instruction in `CLAUDE.md` so future sessions / clones re-set it before committing.
 
 ### Follow-up 6: deleted setup-01b-vercel-api-deploy.yml — Vercel GH integration is the deploy
 
