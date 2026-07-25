@@ -47,7 +47,7 @@ framing as more current than those files.
   itself flags this inherited code as "mostly legacy ... to be harvested or
   retired" and only reuses a few pieces (the LLM wrapper, the cassette test
   harness, the db/tRPC plumbing, one voice-extraction experiment).
-- **No paying customer, no live deployment, no LICENSE chosen yet.**
+- **No paying customer, no live deployment. Licensed under MIT.**
 - Dormant since 2026-05-29 (last activity date in this snapshot).
 
 ## Architecture (what's actually implemented)
